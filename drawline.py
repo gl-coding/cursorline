@@ -26,6 +26,8 @@ class DrawLineWidget(QWidget):
         self.mouse_y = 0
         self.last_mouse_x = 0
         self.last_mouse_y = 0
+        self.press_position_x = 0  # 记录按下时的位置
+        self.press_position_y = 0  # 记录按下时的位置
         
         # 初始化线条长度
         self.line_length = 0
@@ -41,6 +43,7 @@ class DrawLineWidget(QWidget):
         self.is_mouse_pressed = False
         self.after_release = False  # 鼠标释放后的状态
         self.is_dragging_blink = False  # 是否正在拖动闪烁线条
+        self.has_moved_during_press = False  # 在按下期间鼠标是否移动
         
         # 按住时间相关
         self.press_start_time = 0
@@ -82,9 +85,12 @@ class DrawLineWidget(QWidget):
                 self.mouse_y = current_y
                 self.last_mouse_x = self.mouse_x
                 self.last_mouse_y = self.mouse_y
+                self.press_position_x = self.mouse_x  # 记录按下位置
+                self.press_position_y = self.mouse_y  # 记录按下位置
                 self.is_mouse_pressed = True
                 self.after_release = False
                 self.is_dragging_blink = False
+                self.has_moved_during_press = False  # 重置移动标志
                 
                 # 重置线条状态
                 self.line_length = 0
@@ -111,8 +117,8 @@ class DrawLineWidget(QWidget):
                     # 继续保持闪烁状态
                     return
                     
-                # 鼠标释放 - 只有当已经达到了按住足够长的时间才进入闪烁状态
-                if self.hold_long_enough:
+                # 鼠标释放 - 只有当已经达到了按住足够长的时间且期间没有移动才进入闪烁状态
+                if self.hold_long_enough and not self.has_moved_during_press:
                     self.is_mouse_pressed = False
                     self.after_release = True
                     self.is_blinking = True
@@ -126,6 +132,7 @@ class DrawLineWidget(QWidget):
                 # 重置按住时间相关状态
                 self.press_start_time = 0
                 self.hold_long_enough = False
+                self.has_moved_during_press = False
                 
         def on_move(x, y):
             # 监听鼠标移动
@@ -135,6 +142,16 @@ class DrawLineWidget(QWidget):
             # 保存当前鼠标位置
             current_x = int(x)
             current_y = int(y)
+            
+            # 检查鼠标按下但尚未达到时间阈值时的移动
+            if self.is_mouse_pressed and not self.hold_long_enough and not self.is_dragging_blink:
+                # 计算移动距离
+                move_distance = ((current_x - self.press_position_x) ** 2 + 
+                                (current_y - self.press_position_y) ** 2) ** 0.5
+                
+                # 如果移动超过5像素，标记为已移动
+                if move_distance > 5:
+                    self.has_moved_during_press = True
             
             # 如果是在鼠标释放后的闪烁状态且不是拖动模式，检测移动距离
             if self.after_release and not self.is_dragging_blink:
@@ -154,8 +171,9 @@ class DrawLineWidget(QWidget):
                         QTimer.singleShot(0, self.hide)
                         return
             
-            # 如果鼠标按下并且已经按住足够长时间，或者正在拖动闪烁线条，更新线条位置
-            if (self.is_mouse_pressed and self.hold_long_enough) or self.is_dragging_blink:
+            # 如果鼠标按下并且已经按住足够长时间且期间未移动，或者正在拖动闪烁线条，更新线条位置
+            if ((self.is_mouse_pressed and self.hold_long_enough and not self.has_moved_during_press) 
+                or self.is_dragging_blink):
                 self.mouse_x = current_x
                 self.mouse_y = current_y
                 
@@ -184,14 +202,17 @@ class DrawLineWidget(QWidget):
     def update_line(self):
         """更新线条长度"""
         # 检查是否按住足够长的时间
-        if self.is_mouse_pressed and not self.hold_long_enough and not self.is_dragging_blink:
+        if (self.is_mouse_pressed and not self.hold_long_enough and 
+            not self.is_dragging_blink and not self.has_moved_during_press):
             current_time = time.time()
             if current_time - self.press_start_time >= self.hold_threshold:
                 self.hold_long_enough = True
         
-        # 如果没有处于按住状态或按住后释放状态，或者没有按住足够长时间且不是拖动模式，不更新
+        # 如果没有处于按住状态或按住后释放状态，或者没有按住足够长时间且不是拖动模式，
+        # 或者按住期间移动了鼠标，不更新
         if (not self.is_mouse_pressed and not self.after_release) or \
-           (self.is_mouse_pressed and not self.hold_long_enough and not self.is_dragging_blink):
+           (self.is_mouse_pressed and not self.hold_long_enough and not self.is_dragging_blink) or \
+           (self.is_mouse_pressed and self.has_moved_during_press and not self.is_dragging_blink):
             return
             
         # 闪烁逻辑 - 只在鼠标释放后且不是拖动模式时
@@ -202,8 +223,9 @@ class DrawLineWidget(QWidget):
                 self.blink_timer_count = 0
                 self.line_visible = not self.line_visible
         
-        # 线条生长逻辑 - 只在鼠标按下且按住足够长时间且不是拖动模式时
-        if self.is_mouse_pressed and self.hold_long_enough and not self.is_dragging_blink:
+        # 线条生长逻辑 - 只在鼠标按下且按住足够长时间且不是拖动模式且期间未移动时
+        if (self.is_mouse_pressed and self.hold_long_enough and 
+            not self.is_dragging_blink and not self.has_moved_during_press):
             # 当按住鼠标时，线条持续变长直到最大长度，增加变长速度
             if self.line_length < self.max_line_length:
                 self.line_length += 15  # 从5改为15，增加变长速度
@@ -214,10 +236,11 @@ class DrawLineWidget(QWidget):
     def paintEvent(self, event):
         """绘制事件"""
         # 如果没有在按下状态或按下后释放状态，或者闪烁时处于不可见状态，
-        # 或者没有按住足够长时间且不是拖动模式，不绘制
+        # 或者没有按住足够长时间且不是拖动模式，或者按住期间移动了鼠标，不绘制
         if ((not self.is_mouse_pressed and not self.after_release) or 
             (self.is_blinking and not self.line_visible and not self.is_dragging_blink) or
-            (self.is_mouse_pressed and not self.hold_long_enough and not self.is_dragging_blink)):
+            (self.is_mouse_pressed and not self.hold_long_enough and not self.is_dragging_blink) or
+            (self.is_mouse_pressed and self.has_moved_during_press and not self.is_dragging_blink)):
             return
             
         painter = QPainter(self)
